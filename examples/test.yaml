@@ -16,13 +16,6 @@ graphs:
       module: timeflux.nodes.debug
       class: Display
     
-    - id: receive 
-      module: timeflux.nodes.lsl
-      class: Receive
-      params: 
-        prop: name
-        value: udl
-
     - id: ui
       module: timeflux_ui.nodes.ui
       class: UI
@@ -31,12 +24,5 @@ graphs:
     - source: acquire
       target: display
     - source: acquire
-      target: ui:node
-    - source: receive
-      target: ui:stream
-    rate: 10
-
- 
-
-
-    
+      target: ui:signal
+    rate: 30

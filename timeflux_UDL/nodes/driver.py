@@ -12,7 +12,7 @@ from datetime import timezone
 import datetime
 
 maxFrequency = 2000
-createStream = True
+
 
 class UDL(Node):
     """UDL driver.
@@ -54,24 +54,12 @@ class UDL(Node):
             index = list(range(1, channels + 1))
             name = []
             for i in index:
-                name.append("ch_" + i)
+                name.append(i)
             self.names = name
 
 
         global serialdevice
         serialdevice = serial.Serial(port=port, baudrate='115200')
-
-        if (createStream):       
-            data = StreamInfo('udl', 'EEG', channels, rate, 'float32', 'oric6ch')
-            data.desc().append_child_value("manufacturer", "udl")
-            channels = data.desc().append_child("channels")
-            for name in self.names:
-                channels.append_child("channel")\
-                    .append_child_value("label", name)\
-                    .append_child_value("unit", "microvolts")\
-                    .append_child_value("type", "EEG")
-            global outlet
-            outlet = StreamOutlet(data)
 
         # Compute time offset
         row = self._read()
@@ -102,17 +90,13 @@ class UDL(Node):
                 row = self._read()
                 if len(row):
                     self._check(row[0])
-                    dt = datetime.datetime.now(timezone.utc)
-                    utc_time = dt.replace(tzinfo=timezone.utc)
-                    timestamp = utc_time.timestamp()
+                    timestamp = np.datetime64(int(time() * 1e6), "us")
 
                     self._lock.acquire()  # `with self.lock:` is about twice as slow
                     self._timestamps.append(timestamp)
                     self._rows.append(row[2])
                     self._lock.release()
 
-                    if(createStream):
-                        outlet.push_sample(row[2], local_clock())
             except:
                 pass
     
