@@ -5,14 +5,14 @@ graphs:
       module: timeflux_serial.nodes.driver
       class: SerialDevice
       params:
-        port: /dev/ttyACM1
-        channels: 1
-        rate: 1
+        port: /dev/ttyACM0
+        channels: 6
+        rate: 125
 
     - id: display
       module: timeflux.nodes.debug
       class: Display
-    
+
     - id: ui
       module: timeflux_ui.nodes.ui
       class: UI
@@ -22,4 +22,4 @@ graphs:
       target: display
     - source: acquire
       target: ui:signal
-    rate: 30
+    rate: 20

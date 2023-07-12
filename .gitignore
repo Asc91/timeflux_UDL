@@ -9,5 +9,5 @@ build/
 dist/
 .idea
 .coverage
-
+.vscode
 doc/**

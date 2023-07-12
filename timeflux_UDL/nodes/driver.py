@@ -1,14 +1,11 @@
 import serial
-import time
+from time import time
 import numpy as np
-import pandas as pd
 from timeflux.core.exceptions import WorkerInterrupt
-from timeflux.helpers import clock
 from timeflux.core.node import Node
 from threading import Thread, Lock
 from datetime import timezone
 import datetime
-
 
 
 class SerialDevice(Node):
@@ -26,7 +23,7 @@ class SerialDevice(Node):
         names (list of string): The names of channels. Ex: ['C1', 'C2' ..]
             Default: Channels are numbered from 1. 
         rate (int): The device rate in Hz.
-            Max: 1600Hz, Default: 250Hz
+            Max: 1600Hz, Default: 1Hz
 
     Example:
         .. literalinclude:: /../test/graphs/test.yaml
@@ -41,9 +38,9 @@ class SerialDevice(Node):
         recommended for a 1000Hz device rate.
 
     """
-    
-    def __init__(self, port, channels = 1,names = None, rate=250):
-        
+
+    def __init__(self, port, channels=1, names=None, rate=250):
+
         # Check port
         if not port.startswith('/dev/') and not port.startswith('COM'):
             raise ValueError(f'Invalid serial port: {port}')
@@ -56,10 +53,13 @@ class SerialDevice(Node):
         # Connect to device
         global serialdevice
         serialdevice = self._connect(port)
-       
-        
+
         self._channels = channels
+        self.meta = {"rate": rate}
+
+        # Send number of channels and rate to MCU
         self._send(f'channels, {channels}')
+        self._send(f'rate,{rate}')
 
         # Set channel names
         if isinstance(names, list) and len(names) == channels:
@@ -71,36 +71,21 @@ class SerialDevice(Node):
                 name.append(i)
             self.names = name
 
-
-        # Set rate
-        self._send(f'rate,{rate}')
-        # Set meta
-        self.meta = {"rate": rate}
-
         # Start Acquisition
         self._send('start')
 
         # Initialize counters for timestamp indices and continuity checks
-        self._sample_counter = 0
-        
-        
+        self._count = 0
+        self._missed = 0
+
         # Launch background thread
         self._reset()
         self._lock = Lock()
         self._running = True
         self._thread = Thread(target=self._loop).start()
-    
+
     def _connect(self, port):
         device = serial.Serial(port, 115200)
-        msg = device.readline(); # Wait for 'ready\n'
-        try:
-            msg.decode()
-            print(f"ready")
-        except UnicodeDecodeError:
-            self.logger.error('Unstable state. Please re-plug the device and start again.')
-            # https://stackoverflow.com/questions/21073086/wait-on-arduino-auto-reset-using-pyserial
-            # https://forum.arduino.cc/index.php?topic=38981.0
-            raise WorkerInterrupt()
         return device
 
     def _reset(self):
@@ -108,25 +93,26 @@ class SerialDevice(Node):
         self._rows = []
         self._timestamps = []
 
-
     def _loop(self):
         """Acquire and cache data."""
         while self._running:
             try:
                 row = self._read()
-                if len(row):
-                    self._check(row[0])
+             
+                if len(row) > 1:
+                    # self._check(row[0])
                     timestamp = np.datetime64(int(time() * 1e6), "us")
-
-                    self._lock.acquire()  # `with self.lock:` is about twice as slow
+                    self._lock.acquire()  
                     self._timestamps.append(timestamp)
-                    self._rows.append(row[2])
+                    self._rows.append(row[1])
                     self._lock.release()
+
                 elif len(row) == 0:
                     print(f"error")
             except:
                 pass
-
+    
+    # Send commands to MCU
     def _send(self, cmd):
         cmd = (cmd + '\n').encode()
         global serialdevice
@@ -136,26 +122,29 @@ class SerialDevice(Node):
         """Read a line of data from the device."""
         row = []
         global serialdevice
-        buffersize = serialdevice.in_waiting
+        serialData = np.full(2*(self._channels + 1), 0, np.uint8) # For storing 8bit data from serial
         
-        serialData = serialdevice.read_until()
-        print(f"buffer: {buffersize} data: {serialData}")
-        data = np.full((self._channels + 2), np.nan, np.uint16)
-        for i in range(0, (self._channels + 2)):
-            j = i*2
-            data[i] = int.from_bytes(serialData[j:j+2], byteorder='little', signed=False)
-          
+        # Checking if data is available
+        buffersize = serialdevice.in_waiting
+        if buffersize >= 2*(self._channels + 1):
 
-        print(f"data: {data}")
-
-        if len(data) == self._channels + 2:
-            packet = data[0]
-            timestamp = data[1]
-            lsldata = data[2:]
+            # Reading data for one sample of all channles
+            serialData = serialdevice.read(2 * (self._channels + 1))
+            temp = np.full((self._channels + 1), 0, np.uint16)  # For converting 8bit data to 16bit
+            data = []
+            for i in range(0, (self._channels + 1)):
+                j = i*2
+                temp[i] = int.from_bytes(serialData[j:j+2], byteorder='little', signed=False)
+                data.append(temp[i])
+        # Separate ADC data and sample number
+        if len(data) == self._channels + 1:
+            lsldata = data[0:self._channels]
+            packet = data[self._channels]
             if lsldata:
-                row = [ packet, timestamp, lsldata]
-        return row
-    
+                row = [packet, lsldata]
+                return row
+        return 0
+
     def _check(self, count):
         """Report dropped samples.
 
@@ -169,15 +158,15 @@ class SerialDevice(Node):
         else:
             if self._missed:
                 self.logger.warn(f"Missed {self._missed} samples")
+                print(f"Missed {self._missed} samples")
                 self._missed = 0
 
     def update(self):
         """Update the node output."""
         with self._lock:
-            if self._rows:          
+            if self._rows:
                 self.o.set(self._rows, self._timestamps, self.names, self.meta)
                 self._reset()
-            
 
     def terminate(self):
         """Cleanup."""
